@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from nilearn import glm, image, plotting
+from nilearn.masking import compute_epi_mask
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn.glm.contrasts import compute_fixed_effects
 from nilearn.interfaces.fmriprep import load_confounds_strategy
@@ -29,14 +30,28 @@ def f(row):
 img_files = sorted(Path(
     'things.fmriprep', 'sub-01'
 ).rglob('*space-T1w_desc-preproc_bold.nii.gz'))
+masks = sorted(Path(
+    'things.fmriprep', 'sub-01'
+).rglob('*space-T1w_desc-brain_mask.nii.gz'))
+
 # only grab events with three digit ses nums ; indicates corrected
 events = sorted(Path(
     'things.fmriprep', 'sourcedata', 'things', 'sub-01'
 ).rglob('*ses-???_*events.tsv'))
 
-# drop ses-01 / ses-001 from images, events
+# drop ses-01 / ses-001 from images, masks, events
 img_files = list(filter( lambda i: ('ses-01' not in str(i)), img_files))
+masks = list(filter( lambda m: ('ses-01' not in str(m)), masks))
 events = list(filter( lambda e: ('ses-001' not in str(e)), events))
+
+# exceptionally for sub-01, ses-030, run-01 had no responses ;
+# need to additionally filter these out
+img_files = list(filter( 
+    lambda i: ('sub-01_ses-30_task-things_run-1' not in str(i)), img_files
+))
+masks = list(filter( 
+    lambda m: ('sub-01_ses-30_task-things_run-1' not in str(m)), masks
+))
 
 # TODO: load this automatically from associated image files
 t_r = 1.49
@@ -95,12 +110,14 @@ for img, event in zip(img_files, events):
 #     plotting.plot_design_matrix(design_matrix)
 #     plt.show()
 
-fixed_fx_contrast, fixed_fx_variance, fixed_fx_stat = compute_fixed_effects(
+ffx_contrast, ffx_variance, ffx_stat, ffx_zscore = compute_fixed_effects(
     [simg['effect_size'] for simg in stats_imgs],
-    [simg['effect_variance'] for simg in stats_imgs]
+    [simg['effect_variance'] for simg in stats_imgs],
+    mask=[m for m in masks],
+    return_z_score=True
 )
 plotting.plot_stat_map(
-    fixed_fx_stat,
+    ffx_zscore,
     bg_img=image.mean_img(img_files[0]),
     threshold=3.0,
     display_mode="z",
