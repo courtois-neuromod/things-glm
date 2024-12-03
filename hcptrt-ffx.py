@@ -1,3 +1,7 @@
+"""
+Model for FFX taken from HCPTRT analyses ; to be deleted
+"""
+
 import os
 import itertools
 import numpy as np

@@ -2,12 +2,11 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from statsmodels import stats
 import matplotlib.pyplot as plt
 from nilearn import glm, image, plotting
 from nilearn.glm.first_level import FirstLevelModel
-from nilearn.interfaces.fmriprep import load_confounds_utils as utils
-from nilearn.interfaces.fmriprep.load_confounds import _load_single_confounds_file
+from nilearn.glm.contrasts import compute_fixed_effects
+from nilearn.interfaces.fmriprep import load_confounds_strategy
 
 
 def f(row):
@@ -29,11 +28,15 @@ def f(row):
 
 img_files = sorted(Path(
     'things.fmriprep', 'sub-01'
-).rglob('*space-T1w_desc-preproc_part-mag_bold.nii.gz'))
+).rglob('*space-T1w_desc-preproc_bold.nii.gz'))
+# only grab events with three digit ses nums ; indicates corrected
 events = sorted(Path(
     'things.fmriprep', 'sourcedata', 'things', 'sub-01'
-).rglob('*events.tsv'))
+).rglob('*ses-???_*events.tsv'))
 
+# drop ses-01 / ses-001 from images, events
+img_files = list(filter( lambda i: ('ses-01' not in str(i)), img_files))
+events = list(filter( lambda e: ('ses-001' not in str(e)), events))
 
 # TODO: load this automatically from associated image files
 t_r = 1.49
@@ -43,22 +46,13 @@ frame_times = (
 )
 
 design_matrices = []
-for img, event in zip(img_files[:20], events[:20]):
+stats_imgs = []
+for img, event in zip(img_files, events):
 
-    # get associated confounds file
-    # can be streamlined once 
-    # https://github.com/courtois-neuromod/cneuromod-things/issues/53
-    # is resolved
-    # TODO: Select sensible choices here
-    confounds_file = utils._get_file_name(img)
-    confounds_json = utils.get_json(confounds_file)
-    _, confounds = _load_single_confounds_file(
-        confounds_file,
-        strategy=['motion', 'compcor'],
-        demean=True,
-        confounds_json_file=confounds_json,
-        motion='basic',
-        compcor='anat_combined',
+    confounds, _ = load_confounds_strategy(
+        str(img),
+        denoise_strategy='compcor',
+        compcor='temporal_anat_combined',
         n_compcor=10,
     )
 
@@ -69,35 +63,44 @@ for img, event in zip(img_files[:20], events[:20]):
     memory_events = pd.DataFrame(
         {
             "trial_type": df.memory_cond,
-            "onset": df.onset_flip,
-            "duration": (df.offset_flip - df.onset_flip)
+            "onset": df.onset,
+            "duration": df.duration
         }
     )
+    if memory_events.duplicated('onset').any():
+        print(f'Detected duplicate events in {event}!')
 
     # generate design matrices
     # TODO: Select sensible choices here
     design_matrix = glm.first_level.make_first_level_design_matrix(
         frame_times=frame_times,
         events=memory_events,
-        drift_model="polynomial",
-        drift_order=3,
+        # drift_model="polynomial",
+        # drift_order=3,
         add_regs=confounds,
         add_reg_names=confounds.columns,
         hrf_model="glover",
     )
     design_matrices.append(design_matrix)
-    
-# plotting.plot_design_matrix(design_matrix)
-# plt.show()
 
-fmri_glm = FirstLevelModel()
-fmri_glm = fmri_glm.fit(img_files[:20], design_matrices=design_matrices)
-contrast_val = (design_matrix.columns == 'hit') * 1.0 -\
-                    (design_matrix.columns == 'correct_rej')
+    fmri_glm = FirstLevelModel(t_r=t_r, smoothing_fwhm=5)
+    fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
 
-z_map = fmri_glm.compute_contrast(contrast_val, output_type='z_score')
+    contrast_val = (design_matrix.columns == 'hit') * 1.0 -\
+                        (design_matrix.columns == 'correct_rej')
+    stats_img = fmri_glm.compute_contrast(contrast_val, output_type='all')
+    stats_imgs.append(stats_img)
+
+# for design_matrix in design_matrices:    
+#     plotting.plot_design_matrix(design_matrix)
+#     plt.show()
+
+fixed_fx_contrast, fixed_fx_variance, fixed_fx_stat = compute_fixed_effects(
+    [simg['effect_size'] for simg in stats_imgs],
+    [simg['effect_variance'] for simg in stats_imgs]
+)
 plotting.plot_stat_map(
-    z_map,
+    fixed_fx_stat,
     bg_img=image.mean_img(img_files[0]),
     threshold=3.0,
     display_mode="z",
