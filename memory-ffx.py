@@ -7,7 +7,39 @@ import matplotlib.pyplot as plt
 from nilearn import glm, image, plotting
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn.glm.contrasts import compute_fixed_effects
-from nilearn.interfaces.fmriprep import load_confounds_strategy
+from nilearn.interfaces.fmriprep import load_confounds, load_confounds_strategy
+
+
+def _glmdenoise_hrf(rt=0.1, p=[6.68, 14.66, 1.82, 3.15, 3.08, 0, 48.9]):
+    """
+    % returns a hemodynamic response function
+    % FORMAT [hrf,p] = spm_hrf(RT,[p]);
+    % RT   - scan repeat time
+    % p    - parameters of the response function (two gamma functions)
+    %
+    %							defaults
+    %							(seconds)
+    %	p(1) - delay of response (relative to onset)	   6
+    %	p(2) - delay of undershoot (relative to onset)    16
+    %	p(3) - dispersion of response			   1
+    %	p(4) - dispersion of undershoot			   1
+    %	p(5) - ratio of response to undershoot		   6
+    %	p(6) - onset (seconds)				   0
+    %	p(7) - length of kernel (seconds)		  32
+    %
+    % hrf  - hemodynamic response function
+    % p    - parameters of the response function
+    %_______________________________________________________________________
+    % @(#)spm_hrf.m	2.7 Karl Friston 99/05/17
+    """
+    fmri_t = 16
+    dt = rt / fmri_t
+
+    # u = [0:(p(7)/dt)] - p(6)/dt;
+    # hrf   = spm_Gpdf(u,p(1)/p(3),dt/p(3)) - spm_Gpdf(u,p(2)/p(4),dt/p(4))/p(5);
+    # hrf   = hrf([0:(p(7)/RT)]*fMRI_T + 1);
+    # hrf   = hrf'/sum(hrf);
+    raise NotImplementedError
 
 
 def _label_cond(row):
@@ -122,32 +154,36 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
     confounds, _ = load_confounds_strategy(
         str(img),
         denoise_strategy="compcor",
-        compcor="temporal_anat_combined",
-        n_compcor=10,
+        compcor="temporal_anat_separated",
     )
+
+    # confounds, _ = load_confounds(
+    #     str(img),
+    #     strategy=["high_pass", "motion", "wm_csf", "global_signal"],
+    #     motion="basic",
+    #     wm_csf="basic",
+    #     global_signal="basic",
+    # )
 
     n_scans = nib.load(img).shape[-1]
     frame_times = np.arange(n_scans) * t_r
+    minutes_scanned = (n_scans * t_r) / 60
 
     # generate design matrices
     # TODO: Select sensible choices here
     design_matrix = glm.first_level.make_first_level_design_matrix(
         frame_times=frame_times,
         events=memory_events,
-        # drift_model="polynomial",
-        # drift_order=3,
+        drift_model="polynomial",
+        drift_order=round(minutes_scanned / 2),
         add_regs=confounds,
         add_reg_names=confounds.columns,
-        hrf_model="glover",
+        hrf_model="spm",
     )
 
     fmri_glm = FirstLevelModel(t_r=t_r, mask_img=mask, smoothing_fwhm=smoothing_fwhm)
     fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
-
-    contrast_val = (design_matrix.columns == "hit") * 1.0 - (
-        design_matrix.columns == "correct_rej"
-    )
-    stats_img = fmri_glm.compute_contrast(contrast_val, output_type="all")
+    stats_img = fmri_glm.compute_contrast("hit - correct_rej", output_type="all")
 
     if return_x_matrix:
         return stats_img, design_matrix
@@ -160,8 +196,8 @@ if __name__ == "__main__":
     img_files, events, masks = _get_files(subject="sub-01", data_dir=datadir)
 
     stats_imgs = []
-    for img, event, mask in zip(img_files, events, masks):
-        stats_img = _gen_stats_img(img, event, mask)
+    for img, event, mask in zip(img_files[:1], events[:1], masks[:1]):
+        stats_img, xmatrix = _gen_stats_img(img, event, mask, return_x_matrix=True)
         stats_imgs.append(stats_img)
 
     ffx_contrast, ffx_variance, ffx_stat, ffx_zscore = compute_fixed_effects(
@@ -172,13 +208,20 @@ if __name__ == "__main__":
     plotting.plot_stat_map(
         ffx_zscore,
         bg_img=image.mean_img(img_files[0]),
-        threshold=3.0,
+        threshold="auto",
         display_mode="z",
         cut_coords=3,
         black_bg=True,
         title="hit-correct_rej",
     )
     plt.show()
+
+    plotting.view_img(
+        ffx_zscore,
+        bg_img=image.mean_img(img_files[0]),
+        threshold="auto",
+        black_bg=True,
+    ).open_in_browser()
 
     # from https://stackoverflow.com/a/48819434
     # X = tools.add_constant(X1)
