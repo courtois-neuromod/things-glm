@@ -31,6 +31,7 @@ def _glmdenoise_hrf(rt=0.1, p=[6.68, 14.66, 1.82, 3.15, 3.08, 0, 48.9]):
     % p    - parameters of the response function
     %_______________________________________________________________________
     % @(#)spm_hrf.m	2.7 Karl Friston 99/05/17
+    % https://github.com/wandell/mrTutorials-matlab/blob/master/Signal%20Processing/spm_hrf.m
     """
     fmri_t = 16
     dt = rt / fmri_t
@@ -58,6 +59,39 @@ def _label_cond(row):
         cond = "false_alarm"
     elif row["error"] is True and row["condition"] == "seen":
         cond = "miss"
+    else:
+        cond = pd.NA
+    return cond
+
+
+def _label_subcond(row):
+    """
+    Parameters
+    ----------
+    row : pd.Series
+
+    # TODO : Double-check that these are being correctly generated
+    """
+    view_cond, pres_cond = row["subcondition"].split("-", 1)
+    if "-" in pres_cond:
+        pres_cond = pres_cond.split("-")[-1]
+    if not row["error"] and view_cond == "unseen":
+        cond = "correct_rej"
+    elif not row["error"] and view_cond == "seen":
+        if pres_cond == "within":
+            cond = "hit-within"
+        elif pres_cond == "between":
+            cond = "hit-between"
+    elif row["error"] is True and view_cond == "unseen":
+        if pres_cond == "within":
+            cond = "false_alarm-within"
+        elif pres_cond == "between":
+            cond = "false_alarm-between"
+    elif row["error"] is True and view_cond == "seen":
+        if pres_cond == "within":
+            cond = "miss-within"
+        elif pres_cond == "between":
+            cond = "miss-between"
     else:
         cond = pd.NA
     return cond
@@ -146,7 +180,7 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
     # load in events files and create memory conditions
     # based on performance
     df = pd.read_csv(event, sep="\t")
-    df["memory_cond"] = df.apply(_label_cond, axis=1)
+    df["memory_cond"] = df.apply(_label_subcond, axis=1)
     memory_events = pd.DataFrame(
         {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
     )
@@ -183,7 +217,10 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
 
     fmri_glm = FirstLevelModel(t_r=t_r, mask_img=mask, smoothing_fwhm=smoothing_fwhm)
     fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
-    stats_img = fmri_glm.compute_contrast("hit - correct_rej", output_type="all")
+    contrast_val = (design_matrix.columns == "hit-within") * 1.0 - (
+        design_matrix.columns == "correct_rej"
+    )
+    stats_img = fmri_glm.compute_contrast(contrast_val, output_type="all")
 
     if return_x_matrix:
         return stats_img, design_matrix
@@ -196,9 +233,11 @@ if __name__ == "__main__":
     img_files, events, masks = _get_files(subject="sub-01", data_dir=datadir)
 
     stats_imgs = []
-    for img, event, mask in zip(img_files[:1], events[:1], masks[:1]):
+    design_matrices = []
+    for img, event, mask in zip(img_files, events, masks):
         stats_img, xmatrix = _gen_stats_img(img, event, mask, return_x_matrix=True)
         stats_imgs.append(stats_img)
+        design_matrices.append(xmatrix)
 
     ffx_contrast, ffx_variance, ffx_stat, ffx_zscore = compute_fixed_effects(
         [simg["effect_size"] for simg in stats_imgs],
@@ -212,7 +251,7 @@ if __name__ == "__main__":
         display_mode="z",
         cut_coords=3,
         black_bg=True,
-        title="hit-correct_rej",
+        title="hit_within-correct_rej",
     )
     plt.show()
 
