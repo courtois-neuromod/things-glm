@@ -1,0 +1,8 @@
+click
+numpy
+pandas
+matplotlib
+nibabel
+nilearn
+h5py
+pycortex

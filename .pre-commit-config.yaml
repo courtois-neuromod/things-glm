@@ -1,10 +1,1 @@
-repos:
--   repo: https://github.com/psf/black
-    rev: 23.3.0
-    hooks:
-    - id: black
-      language_version: python3.9
--   repo: https://github.com/PyCQA/flake8
-    rev: 6.0.0
-    hooks:
-    - id: flake8
+.git/annex/objects/qg/7W/MD5E-s207--e876d1ceb0d4886771e1d79ea0d080b5.yaml/MD5E-s207--e876d1ceb0d4886771e1d79ea0d080b5.yaml
