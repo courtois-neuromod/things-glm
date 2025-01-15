@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import click
 import numpy as np
 import pandas as pd
 import nibabel as nib
@@ -121,19 +122,19 @@ def _get_files(subject, data_dir):
         T1w space
     """
     img_files = sorted(
-        Path(data_dir, "things.fmriprep", "sub-01").rglob(
+        Path(data_dir, "things.fmriprep", subject).rglob(
             "*space-T1w_desc-preproc_bold.nii.gz"
         )
     )
     masks = sorted(
-        Path(data_dir, "things.fmriprep", "sub-01").rglob(
+        Path(data_dir, "things.fmriprep", subject).rglob(
             "*space-T1w_desc-brain_mask.nii.gz"
         )
     )
 
     # only grab events with three digit ses nums ; indicates corrected
     events = sorted(
-        Path(data_dir, "things.fmriprep", "sourcedata", "things", "sub-01").rglob(
+        Path(data_dir, "things.fmriprep", "sourcedata", "things", subject).rglob(
             "*ses-???_*events.tsv"
         )
     )
@@ -179,44 +180,55 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
     """
     # load in events files and create memory conditions
     # based on performance
-    df = pd.read_csv(event, sep="\t")
-    df["memory_cond"] = df.apply(_label_subcond, axis=1)
-    memory_events = pd.DataFrame(
-        {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
-    )
+    try:
+        df = pd.read_csv(event, sep="\t")
+        df["memory_cond"] = df.apply(_label_subcond, axis=1)
+        memory_events = pd.DataFrame(
+            {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
+        )
 
-    confounds, _ = load_confounds_strategy(
-        str(img),
-        denoise_strategy="compcor",
-        compcor="temporal_anat_separated",
-    )
+        confounds, _ = load_confounds_strategy(
+            str(img),
+            denoise_strategy="compcor",
+            compcor="temporal_anat_separated",
+        )
 
-    # confounds, _ = load_confounds(
-    #     str(img),
-    #     strategy=["high_pass", "motion", "wm_csf", "global_signal"],
-    #     motion="basic",
-    #     wm_csf="basic",
-    #     global_signal="basic",
-    # )
+        # confounds, _ = load_confounds(
+        #     str(img),
+        #     strategy=["high_pass", "motion", "wm_csf", "global_signal"],
+        #     motion="basic",
+        #     wm_csf="basic",
+        #     global_signal="basic",
+        # )
 
-    n_scans = nib.load(img).shape[-1]
-    frame_times = np.arange(n_scans) * t_r
-    minutes_scanned = (n_scans * t_r) / 60
+        n_scans = nib.load(img).shape[-1]
+        frame_times = np.arange(n_scans) * t_r
+        minutes_scanned = (n_scans * t_r) / 60
 
-    # generate design matrices
-    # TODO: Select sensible choices here
-    design_matrix = glm.first_level.make_first_level_design_matrix(
-        frame_times=frame_times,
-        events=memory_events,
-        drift_model="polynomial",
-        drift_order=round(minutes_scanned / 2),
-        add_regs=confounds,
-        add_reg_names=confounds.columns,
-        hrf_model="spm",
-    )
+        # generate design matrices
+        # TODO: Select sensible choices here
+        design_matrix = glm.first_level.make_first_level_design_matrix(
+            frame_times=frame_times,
+            events=memory_events,
+            drift_model="polynomial",
+            drift_order=round(minutes_scanned / 2),
+            add_regs=confounds,
+            add_reg_names=confounds.columns,
+            hrf_model="spm",
+        )
 
-    fmri_glm = FirstLevelModel(t_r=t_r, mask_img=mask, smoothing_fwhm=smoothing_fwhm)
-    fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
+        fmri_glm = FirstLevelModel(
+            t_r=t_r, mask_img=mask, smoothing_fwhm=smoothing_fwhm
+        )
+        fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
+
+    except (FileNotFoundError, ValueError) as e:
+        warn_msg = (
+            "Not all files can be loaded. Please ensure that files have been "
+            "first downloaded with datalad."
+        )
+        raise UserWarning(warn_msg)
+
     contrast_val = (design_matrix.columns == "hit-within") * 1.0 - (
         design_matrix.columns == "correct_rej"
     )
@@ -228,9 +240,14 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
         return stats_img
 
 
-if __name__ == "__main__":
-    datadir = Path.cwd()
-    img_files, events, masks = _get_files(subject="sub-01", data_dir=datadir)
+@click.command()
+@click.option("--sub_name", default="sub-01", help="Subject name")
+@click.option(
+    "--data_dir", default="/Users/emdupre/Desktop/things-glm", help="Data directory."
+)
+def main(sub_name, data_dir):
+    """ """
+    img_files, events, masks = _get_files(subject=sub_name, data_dir=data_dir)
 
     stats_imgs = []
     design_matrices = []
@@ -244,26 +261,25 @@ if __name__ == "__main__":
         [simg["effect_variance"] for simg in stats_imgs],
         return_z_score=True,
     )
-    plotting.plot_stat_map(
-        ffx_zscore,
-        bg_img=image.mean_img(img_files[0]),
-        threshold="auto",
-        display_mode="z",
-        cut_coords=3,
-        black_bg=True,
-        title="hit_within-correct_rej",
-    )
-    plt.show()
 
-    plotting.view_img(
-        ffx_zscore,
-        bg_img=image.mean_img(img_files[0]),
-        threshold="auto",
-        black_bg=True,
-    ).open_in_browser()
+    tstat_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-t_statmap.nii.gz"
+    beta_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-effect_statmap.nii.gz"
+    var_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-variance_statmap.nii.gz"
+    zstat_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-z_statmap.nii.gz"
+
+    ffx_contrast.to_filename(tstat_nii)
+    ffx_variance.to_filename(var_nii)
+    ffx_stat.to_filename(beta_nii)
+    ffx_zscore.to_filename(zstat_nii)
+
+    return
 
     # from https://stackoverflow.com/a/48819434
     # X = tools.add_constant(X1)
     # pd.Series([stats.outliers_influence.variance_inflation_factor(X1.values, i)
     #                for i in range(X1.shape[1])],
     #               index=X1.columns)
+
+
+if __name__ == "__main__":
+    main()
