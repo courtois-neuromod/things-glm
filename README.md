@@ -2,7 +2,7 @@
 
 Code for General Linear Model (GLM) analyses of memory contrasts in the THINGS dataset.
 
- [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 This code assumes that you have access to files in the `things.fmriprep`, `things`, `anat.pycortex` datasets; in particular:
 
@@ -21,6 +21,10 @@ There is an additional quality-check script,
 (e.g., "correct rejection") within individual scanning runs.
 
 Each script is designed to be run at the command-line with options visible via `--help`.
+
+The subject-specific folders included in this repository contain the outputs of `gen-memory-ffx.py`,
+though these can be re-generated (and additional outputs saved, including the run-level design matrices)
+if you have access to all of the data detailed above.
 
 # Flat map visualization 
 
