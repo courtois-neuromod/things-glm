@@ -131,21 +131,19 @@ def _get_files(subject, data_dir):
             "*space-T1w_desc-brain_mask.nii.gz"
         )
     )
-
-    # only grab events with three digit ses nums ; indicates corrected
     events = sorted(
         Path(data_dir, "things.fmriprep", "sourcedata", "things", subject).rglob(
-            "*ses-???_*events.tsv"
+            "*events.tsv"
         )
     )
 
     # drop ses-01 / ses-001 from images, masks, events
     img_files = list(filter(lambda i: ("ses-01" not in str(i)), img_files))
     masks = list(filter(lambda m: ("ses-01" not in str(m)), masks))
-    events = list(filter(lambda e: ("ses-001" not in str(e)), events))
+    events = list(filter(lambda e: ("ses-01" not in str(e)), events))
 
     if subject == "sub-01":
-        # exceptionally for sub-01, ses-030, run-01 had no responses ;
+        # exceptionally for sub-01, ses-30, run-1 had no responses ;
         # need to additionally filter these out
         img_files = list(
             filter(
@@ -154,6 +152,9 @@ def _get_files(subject, data_dir):
         )
         masks = list(
             filter(lambda m: ("sub-01_ses-30_task-things_run-1" not in str(m)), masks)
+        )
+        events = list(
+            filter(lambda e: ("sub-01_ses-30_task-things_run-01" not in str(e)), events)
         )
 
     return img_files, events, masks
