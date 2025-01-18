@@ -37,12 +37,34 @@ def main(sub_name, stat_type, data_dir):
     )
 
     ffx_fname = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-{stat_type}_statmap.nii.gz"
+    anat_fname = f"{sub_name}_desc-preproc_T1w.nii.gz"
     try:
-        ffx_nii = nib.load(Path(data_dir, "things-glm", sub_name, "glm", ffx_fname))
+        ffx_nii = nib.load(
+            Path(data_dir, "things-glm", "things-glm", sub_name, "glm", ffx_fname)
+        )
     except FileNotFoundError:
         warn_msg = (
             f"Statmap not found for subject {sub_name}. "
             f"Please make sure you have previously run `gen_memory_ffx.py` for {sub_name}"
+        )
+        raise UserWarning(warn_msg)
+    try:
+        anat_nii = nib.load(
+            Path(
+                data_dir,
+                "things-glm",
+                "things.fmriprep",
+                "sourcedata",
+                "smriprep",
+                sub_name,
+                "anat",
+                anat_fname,
+            )
+        )
+    except FileNotFoundError:
+        warn_msg = (
+            "Anatomical files cannot be loaded. Please ensure that files have been "
+            "first downloaded with datalad."
         )
         raise UserWarning(warn_msg)
 
@@ -58,7 +80,7 @@ def main(sub_name, stat_type, data_dir):
 
     plotting.view_img(
         ffx_nii,
-        bg_img=None,
+        bg_img=anat_nii,
         threshold="auto",
         black_bg=True,
     ).save_as_html(
