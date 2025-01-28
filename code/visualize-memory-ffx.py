@@ -30,18 +30,23 @@ def main(sub_name, stat_type, data_dir):
         warn_msg = "Unrecognized stat type {stat_type}"
         raise UserWarning(warn_msg)
 
+    # mask_fname = Path(data_dir, "glmsingle", sub_name).rglob(
+    #     f"{sub_name}_task-things_space-T1w_label-brain_desc-unionNonNaN_mask.nii"
+    # )
+    # mask = nib.nifti1.Nifti1Image(mask_fname)
     beta_fname = f"{sub_name}_task-things_space-T1w_model-fitHrfGLMdenoiseRR_stats-imageBetas_desc-zscore_statseries.h5"
     beta_h5 = h5py.File(Path(data_dir, "things-encode", "betas", beta_fname), "r")
     mask = nib.nifti1.Nifti1Image(
         np.array(beta_h5["mask_array"]), affine=np.array(beta_h5["mask_affine"])
     )
 
-    ffx_fname = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-{stat_type}_statmap.nii.gz"
+    ffx_fname = f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_statmap.nii.gz"
     anat_fname = f"{sub_name}_desc-preproc_T1w.nii.gz"
     try:
-        ffx_nii = nib.load(
-            Path(data_dir, "things-glm", "things-glm", sub_name, "glm", ffx_fname)
-        )
+        # ffx_nii = nib.load(
+        #     Path(data_dir, "things-glm", "things-glm", sub_name, "glm", ffx_fname)
+        # )
+        ffx_nii = nib.load(Path(data_dir, "things-glm", "things-glm", ffx_fname))
     except FileNotFoundError:
         warn_msg = (
             f"Statmap not found for subject {sub_name}. "
@@ -84,7 +89,7 @@ def main(sub_name, stat_type, data_dir):
         threshold="auto",
         black_bg=True,
     ).save_as_html(
-        f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-{stat_type}_statmap.html"
+        f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_statmap.html"
     )
 
     ffx_vol = cortex.Volume(
@@ -97,7 +102,7 @@ def main(sub_name, stat_type, data_dir):
         # cmap="magma",
     )
     cortex.quickflat.make_png(
-        f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-{stat_type}_flatmap.png",
+        f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_flatmap.png",
         ffx_vol,
         sampler="trilinear",
         curv_brightness=1.0,

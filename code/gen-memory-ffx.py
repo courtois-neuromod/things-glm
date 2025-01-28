@@ -4,44 +4,10 @@ import click
 import numpy as np
 import pandas as pd
 import nibabel as nib
-import matplotlib.pyplot as plt
-from nilearn import glm, image, plotting
+from nilearn import glm, plotting
 from nilearn.glm.first_level import FirstLevelModel
 from nilearn.glm.contrasts import compute_fixed_effects
-from nilearn.interfaces.fmriprep import load_confounds, load_confounds_strategy
-
-
-def _glmdenoise_hrf(rt=0.1, p=[6.68, 14.66, 1.82, 3.15, 3.08, 0, 48.9]):
-    """
-    % returns a hemodynamic response function
-    % FORMAT [hrf,p] = spm_hrf(RT,[p]);
-    % RT   - scan repeat time
-    % p    - parameters of the response function (two gamma functions)
-    %
-    %							defaults
-    %							(seconds)
-    %	p(1) - delay of response (relative to onset)	   6
-    %	p(2) - delay of undershoot (relative to onset)    16
-    %	p(3) - dispersion of response			   1
-    %	p(4) - dispersion of undershoot			   1
-    %	p(5) - ratio of response to undershoot		   6
-    %	p(6) - onset (seconds)				   0
-    %	p(7) - length of kernel (seconds)		  32
-    %
-    % hrf  - hemodynamic response function
-    % p    - parameters of the response function
-    %_______________________________________________________________________
-    % @(#)spm_hrf.m	2.7 Karl Friston 99/05/17
-    % https://github.com/wandell/mrTutorials-matlab/blob/master/Signal%20Processing/spm_hrf.m
-    """
-    fmri_t = 16
-    dt = rt / fmri_t
-
-    # u = [0:(p(7)/dt)] - p(6)/dt;
-    # hrf   = spm_Gpdf(u,p(1)/p(3),dt/p(3)) - spm_Gpdf(u,p(2)/p(4),dt/p(4))/p(5);
-    # hrf   = hrf([0:(p(7)/RT)]*fMRI_T + 1);
-    # hrf   = hrf'/sum(hrf);
-    raise NotImplementedError
+from nilearn.interfaces.fmriprep import load_confounds_strategy
 
 
 def _label_cond(row):
@@ -52,13 +18,15 @@ def _label_cond(row):
 
     # TODO : Double-check that these are being correctly generated
     """
-    if not row["error"] and row["condition"] == "unseen":
+    view_cond, _ = row["subcondition"].split("-", 1)
+
+    if not row["error"] and view_cond == "unseen":
         cond = "correct_rej"
-    elif not row["error"] and row["condition"] == "seen":
+    elif not row["error"] and view_cond == "seen":
         cond = "hit"
-    elif row["error"] is True and row["condition"] == "unseen":
+    elif row["error"] is True and view_cond == "unseen":
         cond = "false_alarm"
-    elif row["error"] is True and row["condition"] == "seen":
+    elif row["error"] is True and view_cond == "seen":
         cond = "miss"
     else:
         cond = pd.NA
@@ -104,7 +72,7 @@ def _get_files(subject, data_dir):
     ----------
     subject : str
         CNeuroMod subject for analysis. Must be in
-        ['sub-01', 'sub-02', 'sub-03']
+        ['sub-01', 'sub-02', 'sub-03', 'sub-06']
     data_dir : str or Pathlike
         Location on disk with CNeuroMod things.fmriprep dataset.
         Assumes this has previously been installed with datalad.
@@ -143,7 +111,7 @@ def _get_files(subject, data_dir):
     events = list(filter(lambda e: ("ses-01" not in str(e)), events))
 
     if subject == "sub-01":
-        # exceptionally for sub-01, ses-30, run-1 had no responses ;
+        # exceptionally sub-01, ses-30, run-1 had no responses ;
         # need to additionally filter these out
         img_files = list(
             filter(
@@ -157,10 +125,27 @@ def _get_files(subject, data_dir):
             filter(lambda e: ("sub-01_ses-30_task-things_run-01" not in str(e)), events)
         )
 
+    if subject == "sub-06":
+        # exceptionally  sub-06, ses-08, run-6 was dropped after preprocessing ;
+        # not yet removed from the full dataset, so filter accordingly
+        img_files = list(
+            filter(
+                lambda i: ("sub-06_ses-08_task-things_run-6" not in str(i)), img_files
+            )
+        )
+        masks = list(
+            filter(lambda m: ("sub-06_ses-08_task-things_run-6" not in str(m)), masks)
+        )
+        events = list(
+            filter(lambda e: ("sub-06_ses-08_task-things_run-06" not in str(e)), events)
+        )
+
     return img_files, events, masks
 
 
-def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix=False):
+def _gen_fmri_glm(
+    img, event, mask, top_level=False, t_r=1.49, smoothing_fwhm=5, return_x_matrix=False
+):
     """
     Parameters
     ----------
@@ -183,24 +168,22 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
     # based on performance
     try:
         df = pd.read_csv(event, sep="\t")
-        df["memory_cond"] = df.apply(_label_subcond, axis=1)
+        if top_level:
+            df["memory_cond"] = df.apply(_label_cond, axis=1)
+        else:
+            df["memory_cond"] = df.apply(_label_subcond, axis=1)
         memory_events = pd.DataFrame(
             {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
         )
 
+        # n_compcor chosen from
+        # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
         confounds, _ = load_confounds_strategy(
             str(img),
             denoise_strategy="compcor",
             compcor="temporal_anat_separated",
+            n_compcor=5,
         )
-
-        # confounds, _ = load_confounds(
-        #     str(img),
-        #     strategy=["high_pass", "motion", "wm_csf", "global_signal"],
-        #     motion="basic",
-        #     wm_csf="basic",
-        #     global_signal="basic",
-        # )
 
         n_scans = nib.load(img).shape[-1]
         frame_times = np.arange(n_scans) * t_r
@@ -230,32 +213,57 @@ def _gen_stats_img(img, event, mask, t_r=1.49, smoothing_fwhm=5, return_x_matrix
         )
         raise UserWarning(warn_msg)
 
-    contrast_val = (design_matrix.columns == "hit-within") * 1.0 - (
-        design_matrix.columns == "correct_rej"
-    )
-    stats_img = fmri_glm.compute_contrast(contrast_val, output_type="all")
-
     if return_x_matrix:
-        return stats_img, design_matrix
+        return fmri_glm, design_matrix
     else:
-        return stats_img
+        return fmri_glm
 
 
-@click.command()
-@click.option("--sub_name", default="sub-01", help="Subject name")
-@click.option(
-    "--data_dir", default="/Users/emdupre/Desktop/things-glm", help="Data directory."
-)
-def main(sub_name, data_dir):
-    """ """
-    img_files, events, masks = _get_files(subject=sub_name, data_dir=data_dir)
-
+def _gen_stats_img(img_files, events, masks, contrast_dict, data_dir, verbose=True):
+    """
+    Parameters
+    ----------
+    img_files : itr
+    events : itr
+    masks : itr
+    contrast_dict : dict
+    data_dir : str or pathlike
+    verbose : bool
+    """
     stats_imgs = []
-    design_matrices = []
     for img, event, mask in zip(img_files, events, masks):
-        stats_img, xmatrix = _gen_stats_img(img, event, mask, return_x_matrix=True)
+
+        # recreate this ; will need sub_name regardless
+        sub_name, ses, _, run, _ = event.name.split("_")
+
+        fmri_glm, xmatrix = _gen_fmri_glm(
+            img, event, mask, top_level=contrast_dict["top_level"], return_x_matrix=True
+        )
+        if verbose:
+            if contrast_dict["top_level"]:
+                xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
+            else:
+                xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_subcond_design.png"
+
+            out_name = Path(
+                data_dir,
+                sub_name,
+                "glm",
+                "design_matrices",
+                xmatrix_name,
+            )
+            # explicitly make parent directories, if they don't exist
+            out_name.parent.mkdir(parents=True, exist_ok=True)
+            plotting.plot_design_matrix(
+                xmatrix,
+                output_file=out_name,
+            )
+
+        contrast_val = (xmatrix.columns == contrast_dict["condition_a"]) * 1.0 - (
+            xmatrix.columns == contrast_dict["condition_b"]
+        )
+        stats_img = fmri_glm.compute_contrast(contrast_val, output_type="all")
         stats_imgs.append(stats_img)
-        design_matrices.append(xmatrix)
 
     ffx_contrast, ffx_variance, ffx_stat, ffx_zscore = compute_fixed_effects(
         [simg["effect_size"] for simg in stats_imgs],
@@ -263,15 +271,59 @@ def main(sub_name, data_dir):
         return_z_score=True,
     )
 
-    tstat_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-t_statmap.nii.gz"
-    beta_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-effect_statmap.nii.gz"
-    var_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-variance_statmap.nii.gz"
-    zstat_nii = f"{sub_name}_task-things_space-T1w_contrast-HitWithinvCorrectRej_stat-z_statmap.nii.gz"
+    for stat_name, ffx_output in zip(
+        ["t", "variance", "effect", "z"],
+        [ffx_contrast, ffx_variance, ffx_stat, ffx_zscore],
+    ):
+        out_name = Path(
+            data_dir,
+            sub_name,
+            "glm",
+            f"{sub_name}_task-things_space-T1w_contrast-{contrast_dict['contrast_name']}_stat-{stat_name}_statmap.nii.gz",
+        )
+        # explicitly make parent directories, if they don't exist
+        out_name.parent.mkdir(parents=True, exist_ok=True)
+        ffx_output.to_filename(out_name)
+    return
 
-    ffx_contrast.to_filename(tstat_nii)
-    ffx_variance.to_filename(var_nii)
-    ffx_stat.to_filename(beta_nii)
-    ffx_zscore.to_filename(zstat_nii)
+
+@click.command()
+@click.option("--sub_name", default="sub-01", help="Subject name")
+@click.option(
+    "--data_dir", default="/Users/emdupre/Desktop/things-glm", help="Data directory."
+)
+@click.option(
+    "--verbose", is_flag=True, help="Whether to return generated design matrices."
+)
+def main(sub_name, data_dir, verbose):
+    """ """
+    img_files, events, masks = _get_files(subject=sub_name, data_dir=data_dir)
+
+    contrast_dicts = [
+        {
+            "contrast_name": "HitvCorrectRej",
+            "condition_a": "hit",
+            "condition_b": "correct_rej",
+            "top_level": True,
+        },
+        {
+            "contrast_name": "HitWithinvCorrectRej",
+            "condition_a": "hit-within",
+            "condition_b": "correct_rej",
+            "top_level": False,
+        },
+        {
+            "contrast_name": "HitBtwnvCorrectRej",
+            "condition_a": "hit-between",
+            "condition_b": "correct_rej",
+            "top_level": False,
+        },
+    ]
+
+    for contrast_dict in contrast_dicts:
+        _gen_stats_img(
+            img_files, events, masks, contrast_dict, data_dir, verbose=verbose
+        )
 
     return
 
