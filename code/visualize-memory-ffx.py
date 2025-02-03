@@ -17,8 +17,11 @@ os.environ["PATH"] += ":/Applications/Inkscape.app/Contents/MacOS/"
 @click.command()
 @click.option("--sub_name", default="sub-01", help="Subject name.")
 @click.option("--stat_type", default="z", help="Stat type for visualization.")
+@click.option(
+    "--contrast_name", default="HitvCorrectRej", help="Contrast for visualization."
+)
 @click.option("--data_dir", default="/Users/emdupre/Desktop", help="Data directory.")
-def main(sub_name, stat_type, data_dir):
+def main(sub_name, stat_type, contrast_name, data_dir):
     """ """
     sub_names = ["sub-01", "sub-02", "sub-03", "sub-06"]
     if sub_name not in sub_names:
@@ -40,17 +43,19 @@ def main(sub_name, stat_type, data_dir):
         np.array(beta_h5["mask_array"]), affine=np.array(beta_h5["mask_affine"])
     )
 
-    ffx_fname = f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_statmap.nii.gz"
+    ffx_fname = f"{sub_name}_task-things_space-T1w_contrast-{contrast_name}_stat-{stat_type}_statmap.nii.gz"
     anat_fname = f"{sub_name}_desc-preproc_T1w.nii.gz"
     try:
         # ffx_nii = nib.load(
         #     Path(data_dir, "things-glm", "things-glm", sub_name, "glm", ffx_fname)
         # )
-        ffx_nii = nib.load(Path(data_dir, "things-glm", "things-glm", ffx_fname))
+        ffx_nii = nib.load(
+            Path(data_dir, "things-glm", "things-glm", sub_name, "glm", ffx_fname)
+        )
     except FileNotFoundError:
         warn_msg = (
             f"Statmap not found for subject {sub_name}. "
-            f"Please make sure you have previously run `gen_memory_ffx.py` for {sub_name}"
+            f"Please make sure you have previously run `gen_memory_ffx.py` for {sub_name}, {contrast_name}."
         )
         raise UserWarning(warn_msg)
     try:
@@ -89,7 +94,11 @@ def main(sub_name, stat_type, data_dir):
         threshold="auto",
         black_bg=True,
     ).save_as_html(
-        f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_statmap.html"
+        Path(
+            sub_name,
+            "glm",
+            f"{sub_name}_task-things_space-T1w_contrast-{contrast_name}_stat-{stat_type}_statmap.html",
+        )
     )
 
     ffx_vol = cortex.Volume(
@@ -102,7 +111,11 @@ def main(sub_name, stat_type, data_dir):
         # cmap="magma",
     )
     cortex.quickflat.make_png(
-        f"{sub_name}_task-things_space-T1w_contrast-HitBtwnvCorrectRej_stat-{stat_type}_flatmap.png",
+        Path(
+            sub_name,
+            "glm",
+            f"{sub_name}_task-things_space-T1w_contrast-{contrast_name}_stat-{stat_type}_flatmap.png",
+        ),
         ffx_vol,
         sampler="trilinear",
         curv_brightness=1.0,
