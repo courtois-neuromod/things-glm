@@ -6,7 +6,7 @@
 *.js annex.largefiles=nothing
 *.toml annex.largefiles=nothing
 *.tsv annex.largefiles=largerthan=100kb
-*.html annex.largefiles=nothing
+*.html annex.largefiles=largerthan=10mb
 *.md annex.largefiles=nothing
 *.bib annex.largefiles=nothing
 *.tex annex.largefiles=nothing
