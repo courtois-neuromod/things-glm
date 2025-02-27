@@ -1,1 +1,1 @@
-3d4f02ac-bf7c-4f90-9dc3-85498d7b37b2 autoenable=true bucket=cneuromod.things.glm chunk=1GiB datacenter=US encryption=none host=s3.unf-montreal.ca name=unfs3.cneuromod.things.glm port=443 protocol=https requeststyle=path storageclass=STANDARD type=S3 timestamp=1736973516s
+3d4f02ac-bf7c-4f90-9dc3-85498d7b37b2 autoenable=true bucket=cneuromod.things.glm chunk=1GiB datacenter=US encryption=none host=s3.unf-montreal.ca name=unfs3.cneuromod.things.glm port=443 protocol=https requeststyle=path storageclass=STANDARD type=S3 timestamp=1740671024.188065s
