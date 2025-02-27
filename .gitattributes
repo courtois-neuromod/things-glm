@@ -4,7 +4,7 @@
 *.txt annex.largefiles=nothing
 *.css annex.largefiles=nothing
 *.js annex.largefiles=nothing
-*.py annex.largefile=nothing
+*.py annex.largefiles=nothing
 *.toml annex.largefiles=nothing
 *.tsv annex.largefiles=largerthan=100kb
 *.html annex.largefiles=largerthan=10mb
