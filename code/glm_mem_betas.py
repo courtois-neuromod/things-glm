@@ -86,7 +86,7 @@ def do_ttest(betas, labels, label_col, lablist_1, lablist_2):
     betas_grp2 = betas[grp2_mask]
 
     ttest_res = stats.ttest_ind(
-        a=betas_grp1, b=betas_grp2, axis=0, equal_var=True
+        a=betas_grp1, b=betas_grp2, axis=0, equal_var=False,
     )
 
     return ttest_res
