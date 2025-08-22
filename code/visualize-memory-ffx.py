@@ -6,6 +6,7 @@ import click
 import cortex
 import numpy as np
 import nibabel as nib
+from cortex import db
 from nilearn import image, plotting
 import matplotlib.pyplot as plt
 
@@ -101,15 +102,19 @@ def main(sub_name, stat_type, contrast_name, data_dir):
         )
     )
 
+    lh, rh = cortex.get_hemi_masks(subject=sub_name, xfmname="align_auto")
+    db.save_mask(sub_name, "align_auto", "lh", lh)
+
+    # https://gallantlab.org/pycortex/auto_examples/datasets/plot_vertex.html
     ffx_vol = cortex.Volume(
-        data=np.swapaxes(ffx_nii.get_fdata(), 0, -1),
+        data=ffx_nii.get_fdata().T[rh],
         subject=sub_name,
         xfmname="align_auto",
-        mask=mask.get_fdata(),
         # vmin=(np.min(ffx_nii.dataobj) * 0.95),
         # vmax=(np.max(ffx_nii.dataobj) * 0.95),
         # cmap="magma",
     )
+    fig = cortex.quickshow(ffx_vol, sampler="nearest")
     cortex.quickflat.make_png(
         Path(
             sub_name,

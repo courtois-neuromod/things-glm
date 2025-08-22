@@ -1,13 +1,45 @@
 from pathlib import Path
 
+import h5py
 import click
 import numpy as np
 import pandas as pd
 import nibabel as nib
 from nilearn import glm, plotting
 from nilearn.glm.first_level import FirstLevelModel
-from nilearn.glm.contrasts import compute_fixed_effects
 from nilearn.interfaces.fmriprep import load_confounds_strategy
+
+
+def _def_lsa_model(events_df):
+    """
+    Transform the DataFrame for LSA
+
+    Parameters
+    ----------
+    events_df : pd.DataFrame
+
+    Returns
+    -------
+    lsa_events_df : pd.DataFrame
+    """
+    # copy the df to avoid in-place modification
+    lsa_events_df = events_df.copy()
+
+    # for each uniique condition, create a trial counter
+    conditions = lsa_events_df["trial_type"].unique()
+    condition_counter = dict.fromkeys(conditions, 0)
+
+    # iterate over the df, generating new conditions for each trial
+    for i_trial, trial in lsa_events_df.iterrows():
+        trial_condition = trial["trial_type"]
+        condition_counter[trial_condition] += 1
+
+        # We use a unique delimiter here (``__``) that shouldn't be in the
+        # original condition names
+        trial_name = f"{trial_condition}__{condition_counter[trial_condition]:03d}"
+        lsa_events_df.loc[i_trial, "trial_type"] = trial_name
+
+    return lsa_events_df
 
 
 def _label_cond(row):
@@ -28,39 +60,6 @@ def _label_cond(row):
         cond = "false_alarm"
     elif row["error"] is True and view_cond == "seen":
         cond = "miss"
-    else:
-        cond = pd.NA
-    return cond
-
-
-def _label_subcond(row):
-    """
-    Parameters
-    ----------
-    row : pd.Series
-
-    # TODO : Double-check that these are being correctly generated
-    """
-    view_cond, pres_cond = row["subcondition"].split("-", 1)
-    if "-" in pres_cond:
-        pres_cond = pres_cond.split("-")[-1]
-    if not row["error"] and view_cond == "unseen":
-        cond = "correct_rej"
-    elif not row["error"] and view_cond == "seen":
-        if pres_cond == "within":
-            cond = "hit-within"
-        elif pres_cond == "between":
-            cond = "hit-between"
-    elif row["error"] is True and view_cond == "unseen":
-        if pres_cond == "within":
-            cond = "false_alarm-within"
-        elif pres_cond == "between":
-            cond = "false_alarm-between"
-    elif row["error"] is True and view_cond == "seen":
-        if pres_cond == "within":
-            cond = "miss-within"
-        elif pres_cond == "between":
-            cond = "miss-between"
     else:
         cond = pd.NA
     return cond
@@ -100,9 +99,13 @@ def _get_files(subject, data_dir):
         )
     )
     events = sorted(
-        Path(data_dir, "things.fmriprep", "sourcedata", "things", subject).rglob(
-            "*events.tsv"
-        )
+        Path(
+            data_dir,
+            "things.fmriprep",
+            "sourcedata",
+            "things",
+            subject,
+        ).rglob("*events.tsv")
     )
 
     # drop ses-01 / ses-001 from images, masks, events
@@ -143,24 +146,17 @@ def _get_files(subject, data_dir):
     return img_files, events, masks
 
 
-def _gen_fmri_glm(
-    img, event, mask, top_level=False, t_r=1.49, smoothing_fwhm=5, return_x_matrix=False
-):
+def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
     """
     Parameters
     ----------
     img : str or Pathlike
     event : str or Pathlike
     mask : str or Pathlik
-    top_level : Bool
-        Whether to run analyses at the top-level, ignoring
-        within- vs. between-session effects.
     t_r : float
         Default 1.49
     smoothing_fwhm : int
         Default 5
-    return_x_matrix : Bool
-        Default False
 
     Returns
     -------
@@ -171,13 +167,19 @@ def _gen_fmri_glm(
     # based on performance
     try:
         df = pd.read_csv(event, sep="\t")
-        if top_level:
-            df["memory_cond"] = df.apply(_label_cond, axis=1)
-        else:
-            df["memory_cond"] = df.apply(_label_subcond, axis=1)
+
+        # drop trials with no response, since memory effect is not defined
+        for index, row in df.iterrows():
+            if pd.isnull(row["error"]):
+                df.drop(index, inplace=True)
+
+        df["memory_cond"] = df.apply(_label_cond, axis=1)
+
         memory_events = pd.DataFrame(
             {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
         )
+
+        memory_events = _def_lsa_model(memory_events)
 
         # n_compcor chosen from
         # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
@@ -217,77 +219,65 @@ def _gen_fmri_glm(
         )
         raise UserWarning(warn_msg)
 
-    if return_x_matrix:
-        return fmri_glm, design_matrix
-    else:
-        return fmri_glm
+    return fmri_glm, memory_events, design_matrix
 
 
-def _gen_stats_img(img_files, events, masks, contrast_dict, data_dir, verbose=True):
+def _gen_stats_img(img_files, events, masks, data_dir):
     """
     Parameters
     ----------
     img_files : itr
     events : itr
     masks : itr
-    contrast_dict : dict
     data_dir : str or pathlike
-    verbose : bool
     """
     stats_imgs = []
+    condition_names = []
+
     for img, event, mask in zip(img_files, events, masks):
 
         # recreate this ; will need sub_name regardless
         sub_name, ses, _, run, _ = event.name.split("_")
 
-        fmri_glm, xmatrix = _gen_fmri_glm(
-            img, event, mask, top_level=contrast_dict["top_level"], return_x_matrix=True
-        )
-        if verbose:
-            if contrast_dict["top_level"]:
-                xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
-            else:
-                xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_subcond_design.png"
+        fmri_glm, memory_events, xmatrix = _gen_fmri_glm(img, event, mask)
 
-            out_name = Path(
-                data_dir,
-                sub_name,
-                "glm",
-                "design_matrices",
-                xmatrix_name,
-            )
-            # explicitly make parent directories, if they don't exist
-            out_name.parent.mkdir(parents=True, exist_ok=True)
-            plotting.plot_design_matrix(
-                xmatrix,
-                output_file=out_name,
-            )
-
-        contrast_val = (xmatrix.columns == contrast_dict["condition_a"]) * 1.0 - (
-            xmatrix.columns == contrast_dict["condition_b"]
-        )
-        stats_img = fmri_glm.compute_contrast(contrast_val, output_type="all")
-        stats_imgs.append(stats_img)
-
-    ffx_contrast, ffx_variance, ffx_stat, ffx_zscore = compute_fixed_effects(
-        [simg["effect_size"] for simg in stats_imgs],
-        [simg["effect_variance"] for simg in stats_imgs],
-        return_z_score=True,
-    )
-
-    for stat_name, ffx_output in zip(
-        ["t", "variance", "effect", "z"],
-        [ffx_contrast, ffx_variance, ffx_stat, ffx_zscore],
-    ):
+        # save out x_matrices for inspection
+        xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
         out_name = Path(
             data_dir,
             sub_name,
             "glm",
-            f"{sub_name}_task-things_space-T1w_contrast-{contrast_dict['contrast_name']}_stat-{stat_name}_statmap.nii.gz",
+            "design_matrices",
+            xmatrix_name,
         )
         # explicitly make parent directories, if they don't exist
         out_name.parent.mkdir(parents=True, exist_ok=True)
-        ffx_output.to_filename(out_name)
+        plotting.plot_design_matrix(
+            xmatrix,
+            output_file=out_name,
+        )
+
+        # generate beta maps, one per trial
+        trialwise_conditions = memory_events["trial_type"].unique()
+        for condition in trialwise_conditions:
+            condition_names.append(condition)
+
+            beta_map = fmri_glm.compute_contrast(condition, output_type="effect_size")
+            stats_imgs.append(beta_map.get_fdata())
+
+        # save out beta maps in h5
+        h5_name = f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetas_stats.h5"
+        out_name = Path(
+            data_dir,
+            sub_name,
+            "glm",
+            h5_name,
+        )
+        out_name.parent.mkdir(parents=True, exist_ok=True)
+        with h5py.File(out_name, "w") as hf:
+            hf.create_dataset("effect_size", data=stats_imgs)
+            hf.create_dataset("condition_labels", data=condition_names)
+
     return
 
 
@@ -296,46 +286,12 @@ def _gen_stats_img(img_files, events, masks, contrast_dict, data_dir, verbose=Tr
 @click.option(
     "--data_dir", default="/Users/emdupre/Desktop/things-glm", help="Data directory."
 )
-@click.option(
-    "--verbose", is_flag=True, help="Whether to return generated design matrices."
-)
-def main(sub_name, data_dir, verbose):
+def main(sub_name, data_dir):
     """ """
     img_files, events, masks = _get_files(subject=sub_name, data_dir=data_dir)
-
-    contrast_dicts = [
-        {
-            "contrast_name": "HitvCorrectRej",
-            "condition_a": "hit",
-            "condition_b": "correct_rej",
-            "top_level": True,
-        },
-        {
-            "contrast_name": "HitWithinvCorrectRej",
-            "condition_a": "hit-within",
-            "condition_b": "correct_rej",
-            "top_level": False,
-        },
-        {
-            "contrast_name": "HitBtwnvCorrectRej",
-            "condition_a": "hit-between",
-            "condition_b": "correct_rej",
-            "top_level": False,
-        },
-    ]
-
-    for contrast_dict in contrast_dicts:
-        _gen_stats_img(
-            img_files, events, masks, contrast_dict, data_dir, verbose=verbose
-        )
+    _gen_stats_img(img_files, events, masks, data_dir)
 
     return
-
-    # from https://stackoverflow.com/a/48819434
-    # X = tools.add_constant(X1)
-    # pd.Series([stats.outliers_influence.variance_inflation_factor(X1.values, i)
-    #                for i in range(X1.shape[1])],
-    #               index=X1.columns)
 
 
 if __name__ == "__main__":
