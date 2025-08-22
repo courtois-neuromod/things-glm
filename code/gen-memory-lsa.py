@@ -146,7 +146,7 @@ def _get_files(subject, data_dir):
     return img_files, events, masks
 
 
-def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
+def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=False):
     """
     Parameters
     ----------
@@ -157,6 +157,8 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
         Default 1.49
     smoothing_fwhm : int
         Default 5
+    reaction_time : Bool
+        Default False
 
     Returns
     -------
@@ -178,8 +180,17 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
         memory_events = pd.DataFrame(
             {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
         )
-
         memory_events = _def_lsa_model(memory_events)
+
+        if reaction_time:
+            reaction_dur = pd.DataFrame(
+                {
+                    "trial_type": "RTDur",
+                    "onset": df.onset,
+                    "duration": df.response_time_lastkeypress,
+                }
+            )
+            memory_events = pd.concat([reaction_dur, memory_events], ignore_index=True)
 
         # n_compcor chosen from
         # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
@@ -206,9 +217,7 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
             hrf_model="spm",
         )
 
-        fmri_glm = FirstLevelModel(
-            t_r=t_r, mask_img=mask, smoothing_fwhm=smoothing_fwhm
-        )
+        fmri_glm = FirstLevelModel(mask_img=mask, smoothing_fwhm=smoothing_fwhm)
         fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
 
     except (FileNotFoundError, ValueError) as e:
@@ -222,7 +231,7 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5):
     return fmri_glm, memory_events, design_matrix
 
 
-def _gen_stats_img(img_files, events, masks, data_dir):
+def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
     """
     Parameters
     ----------
@@ -230,6 +239,7 @@ def _gen_stats_img(img_files, events, masks, data_dir):
     events : itr
     masks : itr
     data_dir : str or pathlike
+    reaction_time : Bool
     """
     stats_imgs = []
     condition_names = []
@@ -239,10 +249,15 @@ def _gen_stats_img(img_files, events, masks, data_dir):
         # recreate this ; will need sub_name regardless
         sub_name, ses, _, run, _ = event.name.split("_")
 
-        fmri_glm, memory_events, xmatrix = _gen_fmri_glm(img, event, mask)
+        fmri_glm, memory_events, xmatrix = _gen_fmri_glm(
+            img, event, mask, reaction_time
+        )
 
         # save out x_matrices for inspection
-        xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
+        if reaction_time:
+            xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_RTDur_design.png"
+        else:
+            xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
         out_name = Path(
             data_dir,
             sub_name,
@@ -266,7 +281,13 @@ def _gen_stats_img(img_files, events, masks, data_dir):
             stats_imgs.append(beta_map.get_fdata())
 
         # save out beta maps in h5
-        h5_name = f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetas_stats.h5"
+
+        if reaction_time:
+            h5_name = (
+                f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetasRTDur_stats.h5"
+            )
+        else:
+            h5_name = f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetas_stats.h5"
         out_name = Path(
             data_dir,
             sub_name,
@@ -286,10 +307,11 @@ def _gen_stats_img(img_files, events, masks, data_dir):
 @click.option(
     "--data_dir", default="/Users/emdupre/Desktop/things-glm", help="Data directory."
 )
-def main(sub_name, data_dir):
+@click.option("--reaction_time", is_flag=True, help="Whether to regress reaction time")
+def main(sub_name, data_dir, reaction_time):
     """ """
     img_files, events, masks = _get_files(subject=sub_name, data_dir=data_dir)
-    _gen_stats_img(img_files, events, masks, data_dir)
+    _gen_stats_img(img_files, events, masks, data_dir, reaction_time=reaction_time)
 
     return
 
