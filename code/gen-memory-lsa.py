@@ -217,6 +217,10 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
             hrf_model="spm",
         )
 
+        # add in stimulus type, repetition in dataframe
+        memory_events["image_path"] = df.image_path
+        memory_events["condition"] = df.condition
+
         fmri_glm = FirstLevelModel(mask_img=mask, smoothing_fwhm=smoothing_fwhm)
         fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
 
@@ -241,10 +245,11 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
     data_dir : str or pathlike
     reaction_time : Bool
     """
-    stats_imgs = []
-    condition_names = []
 
     for img, event, mask in zip(img_files, events, masks):
+
+        stats_imgs = []
+        condition_names = []
 
         # recreate this ; will need sub_name regardless
         sub_name, ses, _, run, _ = event.name.split("_")
@@ -297,7 +302,9 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
         out_name.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(out_name, "w") as hf:
             hf.create_dataset("effect_size", data=stats_imgs)
-            hf.create_dataset("condition_labels", data=condition_names)
+            hf.create_dataset("memory_behavior", data=condition)
+            hf.create_dataset("image_path", data=memory_events.image_path)
+            hf.create_dataset("condition", data=memory_events.condition)
 
     return
 
