@@ -205,14 +205,14 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
         minutes_scanned = (n_scans * t_r) / 60
         design_df = pd.DataFrame(np.repeat([1.0], n_scans), columns=["constant"])
 
-        df = pd.read_csv(event, sep="\t")
         # drop trials with no response, since memory effect is not defined
+        df = pd.read_csv(event, sep="\t")
         for index, row in df.iterrows():
             if pd.isnull(row["error"]):
                 df.drop(index, inplace=True)
 
+        # define LSA model for memory conditions
         df["memory_cond"] = df.apply(_label_cond, axis=1)
-
         memory_events = pd.DataFrame(
             {
                 "trial_type": df.memory_cond,
@@ -223,6 +223,7 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
         )
         memory_events = _def_lsa_model(memory_events)
 
+        # convolve each memory event with HRF, add to design_df
         for _, mem in memory_events.iterrows():
             regressor_array, regressor_name = compute_regressor(
                 [[m] for m in mem[1:].values],
@@ -235,6 +236,7 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
             )
             design_df = pd.concat([design_df, regressor_series], axis=1)
 
+        # if using reaction time, define and convole with HRF, add to design_df
         if reaction_time:
             reaction_dur = pd.DataFrame(
                 {
@@ -254,17 +256,16 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
             )
             design_df = pd.concat([design_df, reaction_dur_conv], axis=1)
 
-            # memory_events = pd.concat(
-            #     [memory_events, reaction_dur], ignore_index=True
-            # ).sort_values("onset")
-
+        # calculate polynomial drifts, of same order as GLMSingle
         poly_drifts = _poly_drift(
             order=round(minutes_scanned / 2),
             frame_times=frame_times,
         )[
             :, :-1
-        ]  # drop constant regressor, since already added
+        ]  # drop constant regressor, since already present in df
+        drifts = pd.DataFrame(poly_drifts, columns=["poly_drift0", "poly_drift1"])
 
+        # Load confounds using compcor strategy ;
         # n_compcor chosen from
         # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
         confounds, _ = load_confounds_strategy(
@@ -274,16 +275,17 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
             n_compcor=5,
         )
 
+        # create final design matrix by concatenating
         design_matrix = pd.concat(
             [
                 design_df,
-                poly_drifts,
+                drifts,
                 confounds,
             ],
             axis=1,
         )
-        # generate design matrices
-        # TODO: Select sensible choices here
+
+        # design_matrix should be analogous to the following :
         # design_matrix = glm.first_level.make_first_level_design_matrix(
         #     frame_times=frame_times,
         #     events=memory_events,
@@ -295,9 +297,11 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
         # )
 
         # add in stimulus type, repetition in dataframe
+        # this will be useful later for HDF5
         memory_events["image_path"] = df.image_path
         memory_events["condition"] = df.condition
 
+        # Define and fit First Level model
         fmri_glm = FirstLevelModel(mask_img=mask, smoothing_fwhm=smoothing_fwhm)
         fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
 
