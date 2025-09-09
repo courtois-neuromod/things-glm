@@ -341,7 +341,7 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
 
         # save out x_matrices for inspection
         if reaction_time:
-            xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_RTDur_design.png"
+            xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_ConsDurRTDur_design.png"
         else:
             xmatrix_name = f"{sub_name}_{ses}_task-things_{run}_design.png"
         out_name = Path(
@@ -369,9 +369,7 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
         # save out beta maps in h5
 
         if reaction_time:
-            h5_name = (
-                f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetasRTDur_stats.h5"
-            )
+            h5_name = f"{sub_name}_{ses}_task-things_{run}_desc-ConsDurRTDurtrialwiseBetas_stats.h5"
         else:
             h5_name = f"{sub_name}_{ses}_task-things_{run}_desc-trialwiseBetas_stats.h5"
         out_name = Path(
@@ -384,8 +382,8 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
         with h5py.File(out_name, "w") as hf:
             hf.create_dataset("effect_size", data=stats_imgs)
             hf.create_dataset("memory_behavior", data=condition)
-            hf.create_dataset("image_path", data=memory_events.image_path)
-            hf.create_dataset("condition", data=memory_events.condition)
+            hf.create_dataset("image_path", data=memory_events.image_path.values)
+            hf.create_dataset("condition", data=memory_events.condition.values)
 
     return
 
