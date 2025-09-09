@@ -7,7 +7,39 @@ import pandas as pd
 import nibabel as nib
 from nilearn import glm, plotting
 from nilearn.glm.first_level import FirstLevelModel
+from nilearn.glm.first_level import compute_regressor
 from nilearn.interfaces.fmriprep import load_confounds_strategy
+from nilearn.glm.first_level.hemodynamic_models import orthogonalize
+
+
+def _poly_drift(order, frame_times):
+    """
+    Vendored from nilearn/glm/first_level/design_matrix.
+
+    Create a polynomial drift matrix.
+
+    Parameters
+    ----------
+    order : :obj:`int`,
+        Number of polynomials in the drift model.
+
+    frame_times : array of shape(n_scans),
+        Time stamps used to sample polynomials.
+
+    Returns
+    -------
+    pol : ndarray, shape(n_scans, order + 1)
+         Estimated polynomial drifts plus a constant regressor.
+
+    """
+    order = int(order)
+    pol = np.zeros((np.size(frame_times), order + 1))
+    tmax = float(frame_times.max())
+    for k in range(order + 1):
+        pol[:, k] = (frame_times / tmax) ** k
+    pol = orthogonalize(pol)
+    pol = np.hstack((pol[:, 1:], pol[:, :1]))
+    return pol
 
 
 def _def_lsa_model(events_df):
@@ -168,8 +200,12 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
     # load in events files and create memory conditions
     # based on performance
     try:
-        df = pd.read_csv(event, sep="\t")
+        n_scans = nib.load(img).shape[-1]
+        frame_times = np.arange(n_scans) * t_r
+        minutes_scanned = (n_scans * t_r) / 60
+        design_df = pd.DataFrame(np.repeat([1.0], n_scans), columns=["constant"])
 
+        df = pd.read_csv(event, sep="\t")
         # drop trials with no response, since memory effect is not defined
         for index, row in df.iterrows():
             if pd.isnull(row["error"]):
@@ -178,19 +214,56 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
         df["memory_cond"] = df.apply(_label_cond, axis=1)
 
         memory_events = pd.DataFrame(
-            {"trial_type": df.memory_cond, "onset": df.onset, "duration": df.duration}
+            {
+                "trial_type": df.memory_cond,
+                "onset": df.onset,
+                "duration": df.duration,
+                "amplitude": 1.0,
+            }
         )
         memory_events = _def_lsa_model(memory_events)
+
+        for _, mem in memory_events.iterrows():
+            regressor_array, regressor_name = compute_regressor(
+                [[m] for m in mem[1:].values],
+                "spm",
+                np.arange(n_scans) * t_r + (t_r / 2),
+                con_id=mem.trial_type,
+            )
+            regressor_series = pd.Series(
+                regressor_array.squeeze(), name=regressor_name[0]
+            )
+            design_df = pd.concat([design_df, regressor_series], axis=1)
 
         if reaction_time:
             reaction_dur = pd.DataFrame(
                 {
-                    "trial_type": "RTDur",
                     "onset": df.onset,
                     "duration": df.response_time_lastkeypress,
+                    "amplitude": 1.0,
                 }
             )
-            memory_events = pd.concat([reaction_dur, memory_events], ignore_index=True)
+            regressor_array, _ = compute_regressor(
+                np.transpose(reaction_dur.values),
+                "spm",
+                np.arange(n_scans) * t_r + (t_r / 2),
+                con_id="ConsDurRTDur",
+            )
+            reaction_dur_conv = pd.Series(
+                regressor_array.squeeze(), name="ConsDurRTDur"
+            )
+            design_df = pd.concat([design_df, reaction_dur_conv], axis=1)
+
+            # memory_events = pd.concat(
+            #     [memory_events, reaction_dur], ignore_index=True
+            # ).sort_values("onset")
+
+        poly_drifts = _poly_drift(
+            order=round(minutes_scanned / 2),
+            frame_times=frame_times,
+        )[
+            :, :-1
+        ]  # drop constant regressor, since already added
 
         # n_compcor chosen from
         # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
@@ -201,21 +274,25 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
             n_compcor=5,
         )
 
-        n_scans = nib.load(img).shape[-1]
-        frame_times = np.arange(n_scans) * t_r
-        minutes_scanned = (n_scans * t_r) / 60
-
+        design_matrix = pd.concat(
+            [
+                design_df,
+                poly_drifts,
+                confounds,
+            ],
+            axis=1,
+        )
         # generate design matrices
         # TODO: Select sensible choices here
-        design_matrix = glm.first_level.make_first_level_design_matrix(
-            frame_times=frame_times,
-            events=memory_events,
-            drift_model="polynomial",
-            drift_order=round(minutes_scanned / 2),
-            add_regs=confounds,
-            add_reg_names=confounds.columns,
-            hrf_model="spm",
-        )
+        # design_matrix = glm.first_level.make_first_level_design_matrix(
+        #     frame_times=frame_times,
+        #     events=memory_events,
+        #     drift_model="polynomial",
+        #     drift_order=round(minutes_scanned / 2),
+        #     add_regs=confounds,
+        #     add_reg_names=confounds.columns,
+        #     hrf_model="spm",
+        # )
 
         # add in stimulus type, repetition in dataframe
         memory_events["image_path"] = df.image_path
