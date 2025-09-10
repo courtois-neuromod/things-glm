@@ -199,119 +199,115 @@ def _gen_fmri_glm(img, event, mask, t_r=1.49, smoothing_fwhm=5, reaction_time=Fa
     """
     # load in events files and create memory conditions
     # based on performance
-    try:
-        n_scans = nib.load(img).shape[-1]
-        frame_times = np.arange(n_scans) * t_r
-        minutes_scanned = (n_scans * t_r) / 60
-        design_df = pd.DataFrame(np.repeat([1.0], n_scans), columns=["constant"])
+    # try:
+    n_scans = nib.load(img).shape[-1]
+    frame_times = np.arange(n_scans) * t_r
+    minutes_scanned = (n_scans * t_r) / 60
+    design_df = pd.DataFrame(np.repeat([1.0], n_scans), columns=["constant"])
 
-        # drop trials with no response, since memory effect is not defined
-        df = pd.read_csv(event, sep="\t")
-        for index, row in df.iterrows():
-            if pd.isnull(row["error"]):
-                df.drop(index, inplace=True)
+    # drop trials with no response, since memory effect is not defined
+    df = pd.read_csv(event, sep="\t")
+    for index, row in df.iterrows():
+        if pd.isnull(row["error"]):
+            df.drop(index, inplace=True)
 
-        # define LSA model for memory conditions
-        df["memory_cond"] = df.apply(_label_cond, axis=1)
-        memory_events = pd.DataFrame(
+    # define LSA model for memory conditions
+    df["memory_cond"] = df.apply(_label_cond, axis=1)
+    memory_events = pd.DataFrame(
+        {
+            "trial_type": df.memory_cond,
+            "onset": df.onset,
+            "duration": df.duration,
+            "amplitude": 1.0,
+        }
+    )
+    memory_events = _def_lsa_model(memory_events)
+
+    # convolve each memory event with HRF, add to design_df
+    for _, mem in memory_events.iterrows():
+        regressor_array, regressor_name = compute_regressor(
+            [[m] for m in mem[1:].values],
+            "spm",
+            np.arange(n_scans) * t_r + (t_r / 2),
+            con_id=mem.trial_type,
+        )
+        regressor_series = pd.Series(regressor_array.squeeze(), name=regressor_name[0])
+        design_df = pd.concat([design_df, regressor_series], axis=1)
+
+    # if using reaction time, define and convole with HRF, add to design_df
+    if reaction_time:
+        reaction_dur = pd.DataFrame(
             {
-                "trial_type": df.memory_cond,
                 "onset": df.onset,
-                "duration": df.duration,
+                "duration": df.response_time_lastkeypress,
                 "amplitude": 1.0,
             }
         )
-        memory_events = _def_lsa_model(memory_events)
-
-        # convolve each memory event with HRF, add to design_df
-        for _, mem in memory_events.iterrows():
-            regressor_array, regressor_name = compute_regressor(
-                [[m] for m in mem[1:].values],
-                "spm",
-                np.arange(n_scans) * t_r + (t_r / 2),
-                con_id=mem.trial_type,
-            )
-            regressor_series = pd.Series(
-                regressor_array.squeeze(), name=regressor_name[0]
-            )
-            design_df = pd.concat([design_df, regressor_series], axis=1)
-
-        # if using reaction time, define and convole with HRF, add to design_df
-        if reaction_time:
-            reaction_dur = pd.DataFrame(
-                {
-                    "onset": df.onset,
-                    "duration": df.response_time_lastkeypress,
-                    "amplitude": 1.0,
-                }
-            )
-            regressor_array, _ = compute_regressor(
-                np.transpose(reaction_dur.values),
-                "spm",
-                np.arange(n_scans) * t_r + (t_r / 2),
-                con_id="ConsDurRTDur",
-            )
-            reaction_dur_conv = pd.Series(
-                regressor_array.squeeze(), name="ConsDurRTDur"
-            )
-            design_df = pd.concat([design_df, reaction_dur_conv], axis=1)
-
-        # calculate polynomial drifts, of same order as GLMSingle
-        poly_drifts = _poly_drift(
-            order=round(minutes_scanned / 2),
-            frame_times=frame_times,
-        )[
-            :, :-1
-        ]  # drop constant regressor, since already present in df
-        drifts = pd.DataFrame(poly_drifts, columns=["poly_drift0", "poly_drift1"])
-
-        # Load confounds using compcor strategy ;
-        # n_compcor chosen from
-        # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
-        confounds, _ = load_confounds_strategy(
-            str(img),
-            denoise_strategy="compcor",
-            compcor="temporal_anat_separated",
-            n_compcor=5,
+        regressor_array, _ = compute_regressor(
+            np.transpose(reaction_dur.values),
+            "spm",
+            np.arange(n_scans) * t_r + (t_r / 2),
+            con_id="ConsDurRTDur",
         )
+        reaction_dur_conv = pd.Series(regressor_array.squeeze(), name="ConsDurRTDur")
+        design_df = pd.concat([design_df, reaction_dur_conv], axis=1)
 
-        # create final design matrix by concatenating
-        design_matrix = pd.concat(
-            [
-                design_df,
-                drifts,
-                confounds,
-            ],
-            axis=1,
-        )
+    # calculate polynomial drifts, of same order as GLMSingle
+    poly_drifts = _poly_drift(
+        order=round(minutes_scanned / 2),
+        frame_times=frame_times,
+    )[
+        :, :-1
+    ]  # drop constant regressor, since already present in df
+    drifts = pd.DataFrame(poly_drifts, columns=["poly_drift0", "poly_drift1"])
 
-        # design_matrix should be analogous to the following :
-        # design_matrix = glm.first_level.make_first_level_design_matrix(
-        #     frame_times=frame_times,
-        #     events=memory_events,
-        #     drift_model="polynomial",
-        #     drift_order=round(minutes_scanned / 2),
-        #     add_regs=confounds,
-        #     add_reg_names=confounds.columns,
-        #     hrf_model="spm",
-        # )
+    # Load confounds using compcor strategy ;
+    # n_compcor chosen from
+    # https://www.frontiersin.org/files/Articles/54426/fnins-07-00247-HTML/image_m/fnins-07-00247-g002.jpg
+    confounds, _ = load_confounds_strategy(
+        str(img),
+        denoise_strategy="compcor",
+        compcor="temporal_anat_separated",
+        n_compcor=5,
+    )
 
-        # add in stimulus type, repetition in dataframe
-        # this will be useful later for HDF5
-        memory_events["image_path"] = df.image_path
-        memory_events["condition"] = df.condition
+    # create final design matrix by concatenating
+    design_matrix = pd.concat(
+        [
+            design_df,
+            drifts,
+            confounds,
+        ],
+        axis=1,
+    )
 
-        # Define and fit First Level model
-        fmri_glm = FirstLevelModel(mask_img=mask, smoothing_fwhm=smoothing_fwhm)
-        fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
+    # design_matrix should be analogous to the following :
+    # design_matrix = glm.first_level.make_first_level_design_matrix(
+    #     frame_times=frame_times,
+    #     events=memory_events,
+    #     drift_model="polynomial",
+    #     drift_order=round(minutes_scanned / 2),
+    #     add_regs=confounds,
+    #     add_reg_names=confounds.columns,
+    #     hrf_model="spm",
+    # )
 
-    except (FileNotFoundError, ValueError) as e:
-        warn_msg = (
-            "Not all files can be loaded. "
-            "Please ensure that files have been "
-            "first downloaded with datalad."
-        )
-        raise UserWarning(warn_msg)
+    # add in stimulus type, repetition in dataframe
+    # this will be useful later for HDF5
+    memory_events["image_path"] = df.image_path
+    memory_events["condition"] = df.condition
+
+    # Define and fit First Level model
+    fmri_glm = FirstLevelModel(mask_img=mask, smoothing_fwhm=smoothing_fwhm)
+    fmri_glm = fmri_glm.fit(img, design_matrices=design_matrix)
+
+    # except (FileNotFoundError, ValueError) as e:
+    #     warn_msg = (
+    #         "Not all files can be loaded. "
+    #         "Please ensure that files have been "
+    #         "first downloaded with datalad."
+    #     )
+    #     raise UserWarning(warn_msg)
 
     return fmri_glm, memory_events, design_matrix
 
@@ -381,7 +377,7 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
         out_name.parent.mkdir(parents=True, exist_ok=True)
         with h5py.File(out_name, "w") as hf:
             hf.create_dataset("effect_size", data=stats_imgs)
-            hf.create_dataset("memory_behavior", data=condition)
+            hf.create_dataset("memory_behavior", data=condition_names)
             hf.create_dataset("image_path", data=memory_events.image_path.values)
             hf.create_dataset("condition", data=memory_events.condition.values)
 
