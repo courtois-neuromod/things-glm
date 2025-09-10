@@ -334,6 +334,7 @@ def _gen_stats_img(img_files, events, masks, data_dir, reaction_time):
 
         # recreate this ; will need sub_name regardless
         sub_name, ses, _, run, _ = event.name.split("_")
+        print(f"Currently running {sub_name}, {ses}, {run}")
 
         fmri_glm, memory_events, xmatrix = _gen_fmri_glm(
             img, event, mask, reaction_time=reaction_time
