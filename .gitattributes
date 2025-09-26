@@ -14,3 +14,4 @@
 *.nii.gz annex.largefiles=anything
 *.tgz annex.largefiles=anything
 *.yml annex.largefiles=nothing
+.github/** annex.largefiles=nothing
